@@ -14,6 +14,7 @@ import traceback
 import pickle
 import json
 import pandas as pd  # اضافه شد برای خواندن CSV
+import requests  # اضافه شد برای دریافت داده از اینترنت
 
 # 1. تنظیم توکن Hugging Face API
 # در Google Colab، بهتر است توکن را به عنوان یک متغیر محیطی تنظیم کنید
@@ -53,7 +54,12 @@ def extract_text_from_pdf(pdf_path):
 # هر ردیف یک chunk است
 
 def extract_rows_from_csv(csv_path):
-    df = pd.read_csv(csv_path)
+    if csv_path.startswith('http://') or csv_path.startswith('https://'):
+        response = requests.get(csv_path)
+        response.encoding = 'utf-8'
+        df = pd.read_csv(io.StringIO(response.text))
+    else:
+        df = pd.read_csv(csv_path)
     rows = []
     for _, row in df.iterrows():
         # فرض: ستون‌های name, description, price, stock
@@ -226,14 +232,27 @@ def save_user_history(history):
 
 # Main execution logic
 if __name__ == "__main__":
-    csv_path = "products.csv"
+    csv_path = "https://docs.google.com/spreadsheets/d/1n5kXGOwOzVHmmdNIkhzJUaNaf_6qgJNMyz79gp5jl8E/export?format=csv"
     embedding_model_name = "sentence-transformers/all-MiniLM-L6-v2"
     force_rebuild = False
     user_input = input("آیا می‌خواهید کش را بازسازی کنید؟ (y/n): ").strip().lower()
     if user_input == 'y':
         force_rebuild = True
     # بررسی تغییرات فایل CSV
-    csv_mtime = os.path.getmtime(csv_path) if os.path.exists(csv_path) else None
+    def is_remote_url(path):
+        return path.startswith('http://') or path.startswith('https://')
+
+    if is_remote_url(csv_path):
+        try:
+            resp = requests.head(csv_path, allow_redirects=True, timeout=10)
+            csv_exists = resp.status_code == 200
+        except Exception:
+            csv_exists = False
+        csv_mtime = None  # نمی‌توان mtime را برای URL گرفت
+    else:
+        csv_exists = os.path.exists(csv_path)
+        csv_mtime = os.path.getmtime(csv_path) if csv_exists else None
+
     state_path = os.path.join(CACHE_DIR, "csv_state.json")
     cached_state = None
     if os.path.exists(state_path):
@@ -245,8 +264,8 @@ if __name__ == "__main__":
         if chunks is None or index is None or embedding_model is None:
             need_rebuild = True
     if need_rebuild:
-        if not os.path.exists(csv_path):
-            print(f"فایل {csv_path} پیدا نشد!")
+        if not csv_exists:
+            print(f"فایل {csv_path} پیدا نشد یا قابل دسترسی نیست!")
             exit(1)
         print(f"در حال خواندن فایل: {csv_path}")
         rows = extract_rows_from_csv(csv_path)
